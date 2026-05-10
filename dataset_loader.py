@@ -8,7 +8,7 @@ from typing import Dict, Tuple
 def get_glaucoma_dataloaders(
     data_dir: str,
     batch_size: int = 16,
-    num_workers: int = 4,
+    num_workers: int = 0,
     val_split: float = 0.2,
     seed: int = 42,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, Dict[int, str]]:
