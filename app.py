@@ -262,7 +262,9 @@ def get_dataset_info(data_dir: str):
 
     train_dataset = datasets.ImageFolder(root=train_dir)
     test_dataset = datasets.ImageFolder(root=test_dir)
-    idx_to_class = {index: label for label, index in train_dataset.class_to_idx.items()}
+    # Fix folder name typo 'glucauma'/'Glucauma' to 'glaucoma' if it exists in the filesystem
+    import re
+    idx_to_class = {index: re.sub(r"glucauma", "glaucoma", label, flags=re.IGNORECASE) for label, index in train_dataset.class_to_idx.items()}
 
     train_counts = {idx_to_class[idx]: 0 for idx in idx_to_class}
     test_counts = {idx_to_class[idx]: 0 for idx in idx_to_class}
