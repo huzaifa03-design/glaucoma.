@@ -65,8 +65,16 @@ def inject_custom_css():
         padding-top: 2rem;
     }
     [data-testid="stMetricValue"] {
-        white-space: normal;
-        word-wrap: break-word;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        font-size: 1.1rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
     }
     </style>
     """
