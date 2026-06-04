@@ -254,7 +254,6 @@ def build_classification_report(confusion: torch.Tensor, class_names: List[str])
     return report
 
 
-@st.cache_data
 def get_dataset_info(data_dir: str):
     """Get dataset counts and class mappings for display."""
     data_dir = Path(data_dir)
@@ -281,8 +280,7 @@ def get_dataset_info(data_dir: str):
     }
 
 
-@st.cache_resource
-def evaluate_test_metrics(_model: torch.nn.Module, data_dir: str, _idx_to_class: Dict[int, str]):
+def evaluate_test_metrics(model: torch.nn.Module, data_dir: str, idx_to_class: Dict[int, str]):
     """Compute test accuracy, confusion matrix, and report for the app."""
     try:
         _, _, test_loader, _ = get_glaucoma_dataloaders(data_dir, batch_size=32)
@@ -290,8 +288,6 @@ def evaluate_test_metrics(_model: torch.nn.Module, data_dir: str, _idx_to_class:
         return None
 
     device = get_device()
-    model = _model
-    idx_to_class = _idx_to_class
     model.eval()
     correct = 0
     total = 0
