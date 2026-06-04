@@ -2,9 +2,11 @@ import os
 from pathlib import Path
 from typing import Dict, List
 
+import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from torchvision import datasets, transforms
 
@@ -62,6 +64,10 @@ def inject_custom_css():
     .reportview-container .main .block-container {
         padding-top: 2rem;
     }
+    [data-testid="stMetricValue"] {
+        white-space: normal;
+        word-wrap: break-word;
+    }
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -86,7 +92,9 @@ def load_model(checkpoint_path: str):
         best_val_accuracy = None
 
     if all(not isinstance(k, int) for k in idx_to_class.keys()):
-        idx_to_class = {int(v): k for k, v in idx_to_class.items()}
+        idx_to_class = {int(v): str(k).replace("glucauma", "glaucoma") for k, v in idx_to_class.items()}
+    else:
+        idx_to_class = {k: str(v).replace("glucauma", "glaucoma") for k, v in idx_to_class.items()}
 
     model = model.to(device)
     model.eval()
@@ -117,6 +125,60 @@ def predict_image(model: torch.nn.Module, image: Image.Image, idx_to_class: Dict
         "probabilities": probabilities.cpu().tolist(),
         "prediction_index": prediction.item(),
     }
+
+
+class GradCAM:
+    def __init__(self, model, target_layer):
+        self.model = model
+        self.target_layer = target_layer
+        self.gradients = None
+        self.activations = None
+        self.hook_handles = []
+        
+        self.hook_handles.append(self.target_layer.register_forward_hook(self.save_activation))
+        self.hook_handles.append(self.target_layer.register_full_backward_hook(self.save_gradient))
+        
+    def save_activation(self, module, input, output):
+        self.activations = output
+        
+    def save_gradient(self, module, grad_input, grad_output):
+        self.gradients = grad_output[0]
+        
+    def remove_hooks(self):
+        for handle in self.hook_handles:
+            handle.remove()
+            
+    def generate(self, input_tensor, class_idx):
+        self.model.eval()
+        self.model.zero_grad()
+        output = self.model(input_tensor)
+        score = output[:, class_idx]
+        score.backward()
+        
+        gradients = self.gradients.mean(dim=[2, 3], keepdim=True)
+        activations = self.activations
+        
+        cam = (gradients * activations).sum(dim=1, keepdim=True)
+        cam = F.relu(cam)
+        cam = cam.squeeze().cpu().detach().numpy()
+        
+        # Normalize
+        cam = cam - np.min(cam)
+        cam = cam / (np.max(cam) + 1e-8)
+        return cam
+
+
+def overlay_gradcam(image: Image.Image, cam: np.ndarray):
+    """Overlay Grad-CAM heatmap onto the original image."""
+    cam_pil = Image.fromarray(cam).resize(image.size, resample=Image.BILINEAR)
+    cam_resized = np.array(cam_pil)
+    
+    heatmap = plt.cm.jet(cam_resized)[..., :3] * 255
+    heatmap = heatmap.astype(np.uint8)
+    
+    img_np = np.array(image)
+    superimposed = heatmap * 0.4 + img_np * 0.6
+    return Image.fromarray(np.uint8(superimposed))
 
 
 def render_training_accuracy_chart(history: dict = None):
@@ -305,8 +367,8 @@ def main():
 
     if uploaded_file is not None:
         image = Image.open(uploaded_file).convert("RGB")
-        st.image(image, caption="Uploaded Retinal Fundus Image", use_column_width=True)
-
+        st.image(image, caption="Uploaded Image Preview", use_column_width=False, width=300)
+        
         if st.button("Run Prediction"):
             result = predict_image(model, image, idx_to_class)
             prediction_label = result["label"]
@@ -314,14 +376,35 @@ def main():
             prediction_index = result["prediction_index"]
             probabilities = result["probabilities"]
 
-            # Case-insensitive check for glaucoma (handles 'glucauma' or 'glaucoma')
-            is_glaucoma = prediction_label.lower() in ["glucauma", "glaucoma"]
+            with st.spinner("Generating Grad-CAM heatmap..."):
+                # Use the last residual block of ResNet18
+                gradcam = GradCAM(model, model.layer4[-1])
+                input_tensor = preprocess_image(image).to(get_device())
+                
+                # We need gradients to compute Grad-CAM, so we ensure requires_grad is True temporarily
+                with torch.set_grad_enabled(True):
+                    # If input_tensor doesn't require grad, just the model parameters need to process it
+                    # The backward hook on the layer will capture the gradients.
+                    cam_mask = gradcam.generate(input_tensor, prediction_index)
+                    
+                gradcam.remove_hooks()
+                heatmap_img = overlay_gradcam(image, cam_mask)
+
+            # Case-insensitive check for glaucoma
+            is_glaucoma = prediction_label.lower() == "glaucoma"
 
             # Display prediction alert
             if is_glaucoma:
                 st.error(f"⚠️ Glaucoma detected - Confidence: {confidence:.2f}%")
             else:
                 st.success(f"✅ Normal retina detected - Confidence: {confidence:.2f}%")
+
+            # Display side-by-side images
+            img_col1, img_col2 = st.columns(2)
+            with img_col1:
+                st.image(image, caption="Original Image", use_column_width=True)
+            with img_col2:
+                st.image(heatmap_img, caption="Grad-CAM Heatmap", use_column_width=True)
 
             # Clean prediction section
             st.markdown("### Prediction Details")
@@ -330,6 +413,7 @@ def main():
                 st.metric("Predicted Class", prediction_label.title())
             with col2:
                 st.metric("Confidence", f"{confidence:.2f}%")
+
 
             st.write(
                 f"**Probability ({class_names[0].title()} / {class_names[1].title()}):** "
